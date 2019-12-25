@@ -1,0 +1,325 @@
+---
+title: "Made"
+author: "Kirill Setdekov"
+date: "September 17, 2019"
+output:
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	cache = TRUE
+)
+```
+
+```{r read}
+library(data.table)
+#untar("data/train.tar.gz")
+
+library(readr)
+train <- read_delim(
+    "train.csv",
+    ";",
+    quote = "\\\"",
+    escape_double = FALSE,
+    trim_ws = TRUE,
+    n_max = 1000000
+)
+
+trainshort <- read_delim(
+    "train.csv",
+    ";",
+    quote = "\\\"",
+    escape_double = FALSE,
+    trim_ws = TRUE,
+    # n_max = 1000000,
+    col_types = cols_only(
+        'timestamp' = col_double(),
+        'label' = col_double(),
+        'C4' = col_double(),
+        'C5' = col_double(),
+        'C8' = col_double()
+    )
+)
+```
+```{r exploratory}
+library(ggplot2)
+library(GGally)
+library(dplyr)
+train <- train %>% mutate(labelf = factor(label))
+ggpairs(train[1:1000, !names(train) %in% c("CG1")] )
+
+
+trainshort <- train[,!names(train) %in% c("CG1","labelf")]
+trainshort <- trainshort[complete.cases(trainshort),]
+fit1 <- lm(label~., data = trainshort)
+anova(fit1)
+
+fit1step <- step(fit1)
+summary(fit1step)
+fit1step$anova
+
+
+fit2glm <- glm(label ~ C4, binomial, data = trainshort)
+summary(fit2glm)
+
+#step()
+
+
+# party
+library(party)
+train <- na.omit(train)
+traincomplete <- train[, !names(train) %in% c("CG1","label")] 
+mean(complete.cases(train))
+traincomplete <- traincomplete[complete.cases(traincomplete),]
+fit3party <-
+mob(
+labelf ~ C4 +C5+C8|timestamp,
+data = traincomplete,
+model = glinearModel,
+family = binomial()
+)
+plot(fit3party)
+
+
+traincomplete <- train[, !names(train) %in% c("CG1","labelf")] 
+traincomplete <- traincomplete[complete.cases(traincomplete),]
+
+cfit <- ctree(label~., data = traincomplete)
+plot(cfit)
+
+
+
+traincomplete <- train[, !names(train) %in% c("CG1","label")] 
+traincomplete <- traincomplete[complete.cases(traincomplete),]
+
+fit2glm <- glm(labelf~C1+C2+C3+C4+C5+C6+C7+C8+C9+C11+C12+CG3+l1+l2, binomial, data = traincomplete)
+slm1 <- step(fit2glm)
+summary(slm1)
+fit2glm
+
+cfit <- ctree(labelf~C1+C2+C3+C4+C5+C6+C7+C8+C9+C11+C12+CG3+l1+l2, data = traincomplete)
+plot(cfit)
+
+
+fit4party <- mob(
+labelf ~ C4 +C5+C8|timestamp,
+data = traincomplete,
+model = glinearModel,
+family = binomial()
+)
+plot(fit4party)
+
+#read mode
+trainshort <- trainshort %>% mutate(labelf = factor(label))
+ggpairs(trainshort[1:1000,] )
+traincomplete <- trainshort[complete.cases(trainshort),]
+cfit <- ctree(labelf~., data = traincomplete, controls = ctree_control(mincriterion = 0.9))
+plot(cfit)
+
+fit2glm <- glm(labelf~timestamp, binomial, data = traincomplete)
+summary(fit2glm)
+
+fit3party <-
+mob(
+labelf ~ C8|C4+C5,
+data = traincomplete,
+model = glinearModel,
+family = binomial()
+)
+plot(fit3party)
+
+#C5
+#CG2
+#l2
+#C12
+
+
+#C1
+#C2
+
+ggplot(traincomplete, aes(y = C12 , x = labelf, fill = labelf)) + geom_violin() +
+labs(title = "Violin plot")+theme_bw()
+
+
+ctrl <- mob_control(alpha = 0.05, bonferroni = TRUE, minsplit = 40, verbose = TRUE)
+
+fit3party <-
+mob(
+labelf ~ C4|C5+C8,
+data = traincomplete[1:10000,],
+control = ctrl,
+model = glinearModel,
+family = binomial("logit")
+)
+plot(fit3party)
+
+
+install.packages("woeBinning")
+require(woeBinning)
+df <- as.data.frame(traincomplete)
+binning <- woe.tree.binning(df, 'labelf', df)
+binning <- woe.binning(df = traincomplete,target.var = "labelf",traincomplete)
+df.with.binned.vars.added <- woe.binning.deploy(df, binning,add.woe.or.dum.var='woe')
+
+dfnew <- df.with.binned.vars.added %>% select(labelf, C5.binned, C12.binned, l1.binned, C8.binned, C3.binned, C6.binned, C2.binned, C4.binned, C10.binned, CG2.binned)
+cfit <- ctree(labelf~., data = dfnew )
+plot(cfit)
+
+install.packages("pROC")
+library(pROC)
+library(caret)
+
+
+pred <- predict(cfit, newdata=dfnew)
+
+confusionMatrix(pred, dfnew$labelf)
+
+roc_pred <- prectiction(pred)
+
+
+
+probs <- treeresponse(cfit, newdata=dfnew)
+pred <- do.call(rbind, pred)
+summary(pred)
+
+library(ROCR)
+
+roc_pred <- prediction(pred, dfnew$labelf)
+plot(performance(roc_pred, measure="tpr", x.measure="fpr"), colorize=TRUE)
+
+
+
+levels(traincomplete$labelf) <- c("no", "click") 
+
+model <- train(labelf ~ . , data = traincomplete, method='ctree', tuneLength=10,
+               trControl=trainControl(
+                 method='cv', number=10, classProbs=TRUE, summaryFunction=twoClassSummary))
+model
+plot(model)
+
+
+predict(model, type = "prob")
+hist((predict(model, type = "prob"))[,2])
+
+library(MLmetrics)
+Gini((predict(model, type = "prob"))[,2], ifelse(dfnew$labelf==1, 1,0))
+
+preddf <- data.frame((predict(model, type = "prob"))[,2], dfnew$labelf)
+names(preddf) <- c("prob", "value")
+
+ggplot(preddf, aes(y = prob , x = value, fill = value)) + geom_violin() +
+labs(title = "Violin plot")+theme_bw()
+
+preddf %>% group_by(value) %>% summarise(mean(prob))
+```
+
+```{r}
+save.image()
+
+trainshort <- trainshort %>% mutate(labelf = factor(label))
+trainshort <- trainshort[, !names(trainshort) %in% c("CG1","label")] 
+
+table(trainshort$labelf)
+hist(sample(trainshort$timestamp, 10000))
+
+library(party)
+smalltrain <- trainshort[sample(dim(trainshort)[1],size = 4000000),]
+traincomplete <- smalltrain[complete.cases(smalltrain),]
+
+cfit <- ctree(labelf~., data = traincomplete)
+
+plot(cfit)
+table(predict(cfit, newdata=traincomplete, type="response"),traincomplete$labelf)
+
+predProb = sapply(predict(cfit, newdata=traincomplete,type="prob"),'[[',2)  # obtain probability of class 1 (second element from the lists)
+
+
+library(ROCR)
+
+
+# plot ROC
+roc_pred <- prediction(predProb, traincomplete$labelf)
+perf <- performance(roc_pred, "tpr", "fpr")
+plot(perf, col="red")
+abline(0,1,col="grey")
+
+# get area under the curve
+performance(roc_pred,"auc")@y.values
+plot(cfit, type="simple")
+
+table(traincomplete$labelf, predProb > 0.0006552)
+
+custpred <- factor(ifelse(predProb > 0.0006552, 1, 0))
+table(traincomplete$labelf, custpred)
+
+
+caret::confusionMatrix(data = custpred, 
+                  reference = traincomplete$labelf, positive = "1")
+
+
+
+testsmall <- trainshort[sample(dim(trainshort)[1],size = 4000000),]
+test <- testsmall[complete.cases(testsmall),]
+predProb = sapply(predict(cfit, newdata=test,type="prob"),'[[',2)  # obtain probability of class 1 (second element from the lists)
+
+# plot ROC
+roc_pred <- prediction(predProb, test$labelf)
+perf <- performance(roc_pred, "tpr", "fpr")
+plot(perf, col="red")
+abline(0,1,col="grey")
+performance(roc_pred,"auc")@y.values
+cutoff <- performance(roc_pred,"prbe")@x.values
+cutoff2 <- (unlist(performance(roc_pred,"f")@x.values))[which.max(unlist(performance(roc_pred,"f")@y.values))]
+
+custpred <- factor(ifelse(predProb > cutoff, 1, 0))
+table(test$labelf, custpred)
+
+
+caret::confusionMatrix(data = custpred, 
+                  reference = test$labelf, positive = "1")
+
+
+custpred <- factor(ifelse(predProb > cutoff2, 1, 0))
+table(test$labelf, custpred)
+
+
+caret::confusionMatrix(data = custpred, 
+                  reference = test$labelf, positive = "1")
+```
+
+after week 4
+```{r}
+library(dplyr)
+train <- train %>% mutate(labelf = factor(label))
+trainshort <- train[,!names(train) %in% c("CG1","label")]
+library(ggplot2)
+library(caret)
+inBuild <- createDataPartition(y=trainshort$labelf, p=0.7, list = FALSE)
+validation <- trainshort[-inBuild,]
+buildData <- trainshort[inBuild,]
+inTrain <- createDataPartition(y=buildData$labelf, p=0.7, list = FALSE)
+training <- buildData[inTrain,]
+testing <- buildData[-inTrain,]
+```
+
+
+```{r}
+library(party)
+library(ggplot2)
+library(GGally)
+# training <- training[1:1000,]
+preProcValues <- preProcess(training, method = c("knnImpute", "center", "scale"))
+
+trainTransformed <- predict(preProcValues, training)
+glimpse(trainTransformed)
+mod1 <- train(labelf~., method ="glm", preProcess =preProcValues ,data = training)
+mod2 <- train(labelf~., method ="rf", data = training, trControl = trainControl(method = "cv"),number = 3)
+mod3 <- train(labelf~., method ="rpart", data = training)
+mod4 <- train(labelf~., method ="ctree", data = training)
+mod5 <- mob(labelf~C1+C2+C3+C4+C5+C6+C7+C8+C9+C11+C12+CG3+l1+l2,data = training)
+ggpairs(trainTransformed )
+
+```
+
